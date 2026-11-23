@@ -70,11 +70,13 @@ extension Eigen.Lanczos {
         var shift: Scalar
         if let given = options.shift {
             shift = given
-        } else if least > 0 {
-            shift = -least / 1000
+        } else if least > 0, let zero = try? factor(0), zero.shift == 0, zero.factorization.inertia.negative == 0 {
+            // A positive definite `A`: zero lies below the spectrum and as close to its low end as any shift can.
+            return zero
         } else if least < 0 {
             shift = least * 2
         } else {
+            // A singular or nearly singular `A`, as with rigid-body modes: just below zero, clear of its rounding.
             shift = -scale * Scalar.ulpOfOne.squareRoot()
         }
         for _ in 0..<64 {
@@ -92,63 +94,140 @@ extension Eigen.Lanczos {
         var verified = 0
         var reach: Scalar = 0
         var extra = 1
-        var slices = 0
-        let budget = 64 + 4 * count
+        var missing = 0
+        var stalled = 0
+        var check: (shift: Scalar, negative: Int)? = nil
+        let separation = options.tolerance.squareRoot()
         while verified < count {
-            slices += 1
-            guard slices <= budget else { throw .incomplete }
+            // A run deflates the eigenvectors found near its shift; the rest were purged from its start vector and
+            // return only through rounding, which acceptance checks for.
+            let nearby = values.indices.filter { Swift.abs(values[$0] - sigma) <= reach }
             let pending = values.reduce(0) { $1 > bound ? $0 + 1 : $0 }
-            let wanted = Swift.max(count - verified - pending, 1)
-            let deflation = values.indices.filter { values[$0] > bound || values[$0] >= sigma - reach }
+            let wanted = Swift.max(count - verified - pending, missing, 1)
             let size = Swift.min(
                 options.basis.map { Swift.max($0, 1) } ?? Swift.min(Swift.max(2 * wanted + 20, 40), 300) * extra,
-                order - deflation.count
+                order - values.count
             )
             guard size > 0 else { throw .incomplete }
             let run = self.run(
                 shift: sigma,
                 factorization: factorization,
-                deflation: deflation,
+                nearby: nearby,
                 bound: bound,
                 wanted: wanted,
                 size: size
             )
-            if run.accepted.isEmpty {
-                extra *= 2
+            var accepted = 0
+            for pair in run.accepted where accept(pair.value, pair.vector, nearby: nearby, separation: separation) {
+                accepted += 1
+                reach = Swift.max(reach, Swift.abs(pair.value - sigma))
+            }
+            if accepted == 0 { extra = Swift.min(extra * 2, 64) }
+            // The check: midway between the highest value found below the first unconverged Ritz value and the value
+            // after it, never inside a cluster closer than rounding can tell apart. Its inertia counts the values
+            // below it.
+            let unconverged = run.unconverged.min() ?? Scalar.infinity
+            let above = values.filter { $0 > bound }.sorted() + [unconverged]
+            var settled = -1
+            for index in 0..<(above.count - 1) where above[index] < unconverged {
+                let gap = above[index + 1] - above[index]
+                let scale = Swift.max(Swift.abs(above[index]), Swift.abs(above[index + 1]))
+                if !above[index + 1].isFinite || gap > separation * scale { settled = index }
+            }
+            var next: (shift: Scalar, factorization: Factorization)? = nil
+            if settled >= 0 {
+                let candidate: Scalar
+                if above[settled + 1].isFinite {
+                    candidate = above[settled] + (above[settled + 1] - above[settled]) / 2
+                } else {
+                    let step = Swift.max(above[settled] - bound, Swift.abs(above[settled]) * separation)
+                    candidate = above[settled] + step / 2
+                }
+                if check?.shift != candidate {
+                    let shifted = try factor(candidate)
+                    next = shifted
+                    check = (shifted.shift, shifted.factorization.inertia.negative)
+                }
+            }
+            guard let (shift, negative) = check else {
+                stalled += 1
+                guard stalled <= 24 else { throw .incomplete }
                 continue
             }
-            for pair in run.accepted {
-                values.append(pair.value)
-                vectors.append(pair.vector)
-                reach = Swift.max(reach, 2 * Swift.abs(pair.value - sigma))
-            }
-            // The next shift: midway between the highest eigenvalue found below the first unconverged Ritz value and
-            // the next value above it.
-            let unconverged = run.unconverged.min() ?? Scalar.infinity
-            let above = values.filter { $0 > bound }.sorted()
-            let settled = above.last { $0 < unconverged } ?? above[0]
-            let next = Swift.min(above.first { $0 > settled } ?? Scalar.infinity, unconverged)
-            let candidate: Scalar
-            if next.isFinite {
-                candidate = settled + (next - settled) / 2
-            } else {
-                let step = Swift.max(settled - bound, Swift.abs(settled) * Scalar.ulpOfOne.squareRoot())
-                candidate = settled + step / 2
-            }
-            let shifted = try factor(candidate)
-            let below = values.reduce(0) { $1 <= shifted.shift ? $0 + 1 : $0 }
-            let negative = shifted.factorization.inertia.negative
+            let below = values.reduce(0) { $1 <= shift ? $0 + 1 : $0 }
             if negative == below {
-                bound = shifted.shift
+                // Everything below the check is found: it becomes the bound, and the next shift.
+                bound = shift
                 verified = negative
-            } else if negative < below {
-                throw .incomplete
+                missing = 0
+                stalled = 0
+                if let next {
+                    sigma = next.shift
+                    factorization = next.factorization
+                } else {
+                    (sigma, factorization) = try factor(shift)
+                }
+                reach = 0
+                check = nil
+            } else {
+                // Copies of repeated values are still missing below the check. A run at the same shift from a start
+                // vector purged of every value found has them as its nearest; after two such runs the shift moves
+                // up to the check anyway. More found than counted comes only from a value within rounding of it.
+                missing = Swift.max(negative - below, 0)
+                stalled += 1
+                guard stalled <= 24 else { throw .incomplete }
+                if stalled % 3 == 0 {
+                    if let next {
+                        sigma = next.shift
+                        factorization = next.factorization
+                    } else {
+                        (sigma, factorization) = try factor(shift)
+                    }
+                    reach = 0
+                }
             }
-            sigma = shifted.shift
-            factorization = shifted.factorization
         }
         let ascending = values.indices.sorted { values[$0] < values[$1] }.prefix(count)
         return ascending.map { Eigen.Pair(value: values[$0], vector: vectors[$0]) }
+    }
+
+    /// Adds a converged pair to those found unless it repeats one: a pair whose eigenvalue lies within rounding of a
+    /// found one that was not deflated is `B`-orthogonalized against it, dropped if little is left, and its residual
+    /// tested again.
+    @inlinable
+    mutating func accept(_ value: Scalar, _ vector: [Scalar], nearby: [Int], separation: Scalar) -> Bool {
+        var x = vector
+        let close = values.indices.filter { index in
+            Swift.abs(values[index] - value) <= separation * Swift.max(Swift.abs(value), Swift.abs(values[index]))
+        }
+        if !close.isEmpty && close.contains(where: { !nearby.contains($0) }) {
+            var bx = b.applied(to: x)
+            for index in close {
+                let overlap = Self.dot(vectors[index], bx)
+                Self.add(&x, -overlap, vectors[index])
+            }
+            b.apply(to: x, into: &bx)
+            let length = Self.dot(x, bx).squareRoot()
+            guard length > 1 / 2 else { return false }
+            Self.scale(&x, by: 1 / length)
+            guard residual(value, x) else { return false }
+        }
+        values.append(value)
+        vectors.append(x)
+        return true
+    }
+
+    /// Whether `‖A x − λ B x‖₂ ≤ tolerance · (‖A‖ + |λ| ‖B‖) · ‖x‖₂`.
+    @inlinable
+    func residual(_ value: Scalar, _ x: [Scalar]) -> Bool {
+        let ax = a.applied(to: x)
+        let bx = b.applied(to: x)
+        var sum: Scalar = 0
+        for row in 0..<order {
+            let r = ax[row] - value * bx[row]
+            sum += r * r
+        }
+        return sum.squareRoot() <= options.tolerance * (normA + Swift.abs(value) * normB) * Self.dot(x, x).squareRoot()
     }
 }
 
@@ -171,7 +250,7 @@ extension Eigen.Lanczos {
     mutating func run(
         shift: Scalar,
         factorization: Factorization,
-        deflation: [Int],
+        nearby: [Int],
         bound: Scalar,
         wanted: Int,
         size: Int
@@ -180,13 +259,12 @@ extension Eigen.Lanczos {
         let tolerance = options.tolerance
         stream += 1
         var w = Self.random(count: n, seed: options.seed, stream: stream)
-        var basis: [[Scalar]] = []
-        basis.reserveCapacity(size)
+        var basis = [Scalar](repeating: 0, count: n * size)
         var alphas: [Scalar] = []
         var betas: [Scalar] = []
         var q = [Scalar](repeating: 0, count: n)
         b.apply(to: w, into: &q)
-        orthogonalize(&w, &q, deflation: deflation, basis: basis)
+        orthogonalize(&w, &q, against: Array(values.indices), basis: basis, columns: 0)
         var beta = Self.dot(w, q).squareRoot()
         guard beta > 0 else { return Run(accepted: [], unconverged: []) }
         Self.scale(&w, by: 1 / beta)
@@ -194,15 +272,12 @@ extension Eigen.Lanczos {
         var p = q
         var steps = 0
         while steps < size {
-            let v = w
-            basis.append(v)
+            basis.replaceSubrange((steps * n)..<((steps + 1) * n), with: w)
             factorization.solve(p, into: &w)
             let alpha = Self.dot(w, p)
             alphas.append(alpha)
-            Self.add(&w, -alpha, v)
-            if steps > 0 { Self.add(&w, -betas[steps - 1], basis[steps - 1]) }
             b.apply(to: w, into: &q)
-            orthogonalize(&w, &q, deflation: deflation, basis: basis)
+            orthogonalize(&w, &q, against: nearby, basis: basis, columns: steps + 1)
             beta = Self.dot(w, q).squareRoot()
             steps += 1
             if !(beta > Scalar.ulpOfOne * Swift.abs(alpha)) {
@@ -237,7 +312,6 @@ extension Eigen.Lanczos {
         var accepted: [Eigen.Pair<Scalar>] = []
         var unconverged: [Scalar] = []
         var bx = [Scalar](repeating: 0, count: n)
-        var ax = [Scalar](repeating: 0, count: n)
         for index in 0..<steps {
             let theta = ritz.values[index]
             guard theta != 0 else { continue }
@@ -249,21 +323,10 @@ extension Eigen.Lanczos {
                 continue
             }
             var x = [Scalar](repeating: 0, count: n)
-            for column in 0..<steps {
-                Self.add(&x, ritz.vectors[index * steps + column], basis[column])
-            }
+            Self.accumulate(&x, basis, Array(ritz.vectors[(index * steps)..<((index + 1) * steps)]))
             b.apply(to: x, into: &bx)
-            let length = Self.dot(x, bx).squareRoot()
-            Self.scale(&x, by: 1 / length)
-            Self.scale(&bx, by: 1 / length)
-            a.apply(to: x, into: &ax)
-            var residual: Scalar = 0
-            for row in 0..<n {
-                let r = ax[row] - value * bx[row]
-                residual += r * r
-            }
-            let bound = tolerance * (normA + Swift.abs(value) * normB) * Self.dot(x, x).squareRoot()
-            if residual.squareRoot() <= bound {
+            Self.scale(&x, by: 1 / Self.dot(x, bx).squareRoot())
+            if residual(value, x) {
                 accepted.append(Eigen.Pair(value: value, vector: x))
             } else {
                 unconverged.append(value)
@@ -272,24 +335,15 @@ extension Eigen.Lanczos {
         return Run(accepted: accepted, unconverged: unconverged)
     }
 
-    /// Two passes of classical Gram–Schmidt in the `B` inner product against the deflated eigenvectors and the basis;
-    /// `q` is `B w` on entry and on exit.
+    /// Two passes of classical Gram–Schmidt in the `B` inner product against the found eigenvectors at `indices` and
+    /// the first `columns` columns of the basis; `q` is `B w` on entry and on exit.
     @inlinable
-    func orthogonalize(_ w: inout [Scalar], _ q: inout [Scalar], deflation: [Int], basis: [[Scalar]]) {
+    func orthogonalize(_ w: inout [Scalar], _ q: inout [Scalar], against indices: [Int], basis: [Scalar], columns: Int) {
         for _ in 0..<2 {
-            var coefficients: [Scalar] = []
-            coefficients.reserveCapacity(deflation.count + basis.count)
-            for index in deflation { coefficients.append(Self.dot(vectors[index], q)) }
-            for vector in basis { coefficients.append(Self.dot(vector, q)) }
-            var position = 0
-            for index in deflation {
-                Self.add(&w, -coefficients[position], vectors[index])
-                position += 1
-            }
-            for vector in basis {
-                Self.add(&w, -coefficients[position], vector)
-                position += 1
-            }
+            let found = indices.map { Self.dot(vectors[$0], q) }
+            let coefficients = Self.products(basis, columns: columns, q)
+            for (position, index) in indices.enumerated() { Self.add(&w, -found[position], vectors[index]) }
+            Self.accumulate(&w, basis, coefficients.map { -$0 })
             b.apply(to: w, into: &q)
         }
     }
@@ -301,39 +355,5 @@ extension Eigen.Lanczos {
         return (0..<count).map { index in
             Threefry.unit(key: key, stream: stream, index: UInt64(index), as: Scalar.self) * 2 - 1
         }
-    }
-
-    @inlinable
-    static func dot(_ x: [Scalar], _ y: [Scalar]) -> Scalar {
-        var s0: Scalar = 0
-        var s1: Scalar = 0
-        var s2: Scalar = 0
-        var s3: Scalar = 0
-        let n = x.count
-        var index = 0
-        while index + 4 <= n {
-            s0 += x[index] * y[index]
-            s1 += x[index + 1] * y[index + 1]
-            s2 += x[index + 2] * y[index + 2]
-            s3 += x[index + 3] * y[index + 3]
-            index += 4
-        }
-        while index < n {
-            s0 += x[index] * y[index]
-            index += 1
-        }
-        return (s0 + s1) + (s2 + s3)
-    }
-
-    /// `y += factor · x`.
-    @inlinable
-    static func add(_ y: inout [Scalar], _ factor: Scalar, _ x: [Scalar]) {
-        if factor == 0 { return }
-        for index in y.indices { y[index] += factor * x[index] }
-    }
-
-    @inlinable
-    static func scale(_ x: inout [Scalar], by factor: Scalar) {
-        for index in x.indices { x[index] *= factor }
     }
 }
