@@ -3,7 +3,7 @@ extension Eigen {
     public enum Error: Swift.Error, Hashable, Sendable {
         /// The two matrices of a pencil have different orders.
         case order
-        /// More eigenpairs were asked for than the problem has, or fewer than none.
+        /// More eigenpairs were asked for than the problem has.
         case count
         /// No shift below the spectrum was found, or the second matrix of the pencil is not positive definite.
         case shift

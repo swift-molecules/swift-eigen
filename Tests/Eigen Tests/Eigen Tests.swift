@@ -1,5 +1,6 @@
 import Eigen
 import Eigen_Test_Support
+import Cardinal
 import Foundation
 import Sparse_Test_Support
 import Testing
@@ -130,7 +131,7 @@ extension `Eigen Tests` {
         }
 
         @Test
-        func `A diagonal of the wrong length is refused`() {
+        func `A diagonal of the wrong length is refused`() throws {
             #expect(throws: Eigen.Error.order) { try Eigen.Tridiagonal<Double>(diagonal: [1, 2], offDiagonal: []) }
         }
     }
@@ -139,7 +140,7 @@ extension `Eigen Tests` {
     struct String {
         @Test
         func `A fixed string's modes match the discrete closed form`() throws {
-            let pencil = Eigen.Pencil<Double>.string(points: 400)
+            let pencil = try Eigen.Pencil<Double>.string(points: 400)
             let pairs = try pencil.lowest(30)
             #expect(`Eigen Tests`.relative(pairs.map(\.value), Array(`Eigen Tests`.string(points: 400).prefix(30))) < 1e-10)
             #expect(pencil.residual(of: pairs) < 1e-10)
@@ -160,7 +161,7 @@ extension `Eigen Tests` {
         @Test
         func `A free string has a rigid mode at zero and the rest in closed form`() throws {
             let points = 300
-            let pencil = Eigen.Pencil<Double>.freeString(points: points)
+            let pencil = try Eigen.Pencil<Double>.string(points: Cardinal(UInt(points)), fixed: false)
             let pairs = try pencil.lowest(12)
             let h = 1 / Double(points - 1)
             let expected = (0..<12).map { p in
@@ -175,7 +176,7 @@ extension `Eigen Tests` {
 
         @Test
         func `Many modes are found over many shifts and none is skipped`() throws {
-            let pencil = Eigen.Pencil<Double>.string(points: 1500)
+            let pencil = try Eigen.Pencil<Double>.string(points: 1500)
             let pairs = try pencil.lowest(400, options: .init(basis: 120))
             #expect(`Eigen Tests`.relative(pairs.map(\.value), Array(`Eigen Tests`.string(points: 1500).prefix(400))) < 1e-9)
             #expect(pencil.residual(of: pairs) < 1e-10)
@@ -189,7 +190,7 @@ extension `Eigen Tests` {
         func `A square plate's modes, repeated ones included, match the discrete closed form`() throws {
             let side = 30
             let h = 1 / Double(side + 1)
-            let pencil = Eigen.Pencil<Double>.plate(rows: side, columns: side, spacing: h)
+            let pencil = try Eigen.Pencil<Double>.plate(rows: Cardinal(UInt(side)), columns: Cardinal(UInt(side)), spacing: h)
             let pairs = try pencil.lowest(60)
             let expected = Array(`Eigen Tests`.plate(rows: side, columns: side, spacing: h).prefix(60))
             #expect(`Eigen Tests`.relative(pairs.map(\.value), expected) < 1e-9)
@@ -201,7 +202,7 @@ extension `Eigen Tests` {
         func `A rectangular plate's lowest modes approach π⁴((p/a)² + (q/b)²)²`() throws {
             // 1.5 by 1, h = 1/40.
             let h = 1.0 / 40
-            let pencil = Eigen.Pencil<Double>.plate(rows: 39, columns: 59, spacing: h)
+            let pencil = try Eigen.Pencil<Double>.plate(rows: 39, columns: 59, spacing: h)
             let pairs = try pencil.lowest(4)
             let pi4 = pow(Double.pi, 4)
             let continuum = [(1, 1), (2, 1), (3, 1), (1, 2)].map { p, q in
@@ -216,12 +217,12 @@ extension `Eigen Tests` {
     struct Pencils {
         @Test(arguments: [1, 2, 3])
         func `Every eigenvalue of a scattered pencil matches a dense solve`(seed: UInt64) throws {
-            let n = 40
-            let a = try Sparse.Symmetric<Double>.scattered(order: n, perRow: 3, seed: seed)
-                .adding(.tridiagonal(order: n, diagonal: 1, offDiagonal: 0), scaledBy: -3)
-            let b = Sparse.Symmetric<Double>.scattered(order: n, perRow: 2, seed: seed + 10)
+            let order: Cardinal = 40
+            let a = try Sparse.Symmetric<Double>.scattered(order: order, perRow: 3, seed: seed)
+                .adding(try .tridiagonal(order: order, diagonal: 1, offDiagonal: 0), scaledBy: -3)
+            let b = try Sparse.Symmetric<Double>.scattered(order: order, perRow: 2, seed: seed + 10)
             let pencil = try Eigen.Pencil(a, b)
-            let pairs = try pencil.lowest(n)
+            let pairs = try pencil.lowest(order)
             let expected = `Eigen Tests`.dense(a.dense, b.dense)
             #expect(expected[0] < 0)
             #expect(zip(pairs.map(\.value), expected).allSatisfy { Swift.abs($0 - $1) < 1e-9 * Swift.max(1, Swift.abs($1)) })
@@ -231,15 +232,14 @@ extension `Eigen Tests` {
 
         @Test
         func `Bad questions are refused`() throws {
-            let pencil = Eigen.Pencil<Double>.string(points: 5)
+            let pencil = try Eigen.Pencil<Double>.string(points: 5)
             #expect(throws: Eigen.Error.count) { try pencil.lowest(6) }
-            #expect(throws: Eigen.Error.count) { try pencil.lowest(-1) }
-            #expect(try pencil.lowest(0).isEmpty)
+                        #expect(try pencil.lowest(0).isEmpty)
             #expect(throws: Eigen.Error.order) {
-                try Eigen.Pencil(Sparse.Symmetric<Double>.laplacian(rows: 2, columns: 2), .laplacian(rows: 1, columns: 2))
+                try Eigen.Pencil(try Sparse.Symmetric<Double>.laplacian(rows: 2, columns: 2), try .laplacian(rows: 1, columns: 2))
             }
             #expect(throws: Eigen.Error.shift) {
-                try Eigen.Pencil(Sparse.Symmetric<Double>.laplacian(rows: 2, columns: 2), .laplacian(rows: 2, columns: 2).scaled(by: -1))
+                try Eigen.Pencil(try Sparse.Symmetric<Double>.laplacian(rows: 2, columns: 2), try .laplacian(rows: 2, columns: 2).scaled(by: -1))
                     .lowest(1)
             }
         }

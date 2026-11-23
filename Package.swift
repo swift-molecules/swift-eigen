@@ -9,6 +9,7 @@ let package = Package(
         .library(name: "Eigen Test Support", targets: ["Eigen Test Support"]),
     ],
     dependencies: [
+        .package(url: "https://github.com/swift-atoms/swift-cardinal.git", branch: "main"),
         .package(url: "https://github.com/swift-molecules/swift-sparse.git", branch: "main"),
         .package(url: "https://github.com/swift-atoms/swift-threefry.git", branch: "main"),
     ],
@@ -16,6 +17,7 @@ let package = Package(
         .target(
             name: "Eigen",
             dependencies: [
+                .product(name: "Cardinal", package: "swift-cardinal"),
                 .product(name: "Sparse", package: "swift-sparse"),
                 .product(name: "Threefry", package: "swift-threefry"),
             ]
@@ -32,6 +34,7 @@ let package = Package(
             dependencies: [
                 .target(name: "Eigen"),
                 .target(name: "Eigen Test Support"),
+                .product(name: "Cardinal", package: "swift-cardinal"),
                 .product(name: "Sparse Test Support", package: "swift-sparse"),
             ]
         ),

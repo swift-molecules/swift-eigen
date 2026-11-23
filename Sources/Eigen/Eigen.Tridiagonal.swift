@@ -53,12 +53,15 @@ extension Eigen.Tridiagonal {
         var e = offDiagonal + [0]
         if order == 0 { return ([], []) }
         var z = [Scalar](repeating: 0, count: order * rows)
-        for row in 0..<rows {
-            // Row `row` of the carried block is row `order − rows + row` of the identity.
+        var row = 0
+        while row < rows {
+            // WHY: row `row` of the carried block is row `order − rows + row` of the identity.
             z[(order - rows + row) * rows + row] = 1
+            row += 1
         }
         let epsilon = Scalar.ulpOfOne
-        for l in 0..<order {
+        var l = 0
+        while l < order {
             var iterations = 0
             while true {
                 var m = l
@@ -95,10 +98,12 @@ extension Eigen.Tridiagonal {
                     p = s * r
                     d[i + 1] = g + p
                     g = c * r - b
-                    for row in 0..<rows {
+                    var row = 0
+                    while row < rows {
                         f = z[(i + 1) * rows + row]
                         z[(i + 1) * rows + row] = s * z[i * rows + row] + c * f
                         z[i * rows + row] = c * z[i * rows + row] - s * f
+                        row += 1
                     }
                     i -= 1
                 }
@@ -107,6 +112,7 @@ extension Eigen.Tridiagonal {
                 e[l] = g
                 e[m] = 0
             }
+            l += 1
         }
         let sorted = (0..<order).sorted { d[$0] < d[$1] }
         var vectors = [Scalar](repeating: 0, count: order * rows)

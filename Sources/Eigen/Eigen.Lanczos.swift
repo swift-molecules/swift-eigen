@@ -45,13 +45,15 @@ extension Eigen.Lanczos {
     func factor(_ shift: Scalar) throws(Eigen.Error) -> (shift: Scalar, factorization: Factorization) {
         var sigma = shift
         let scale = Swift.max(normA / Swift.max(normB, Scalar.leastNormalMagnitude), Scalar.leastNormalMagnitude)
-        for attempt in 0..<8 {
+        var attempt = 0
+        while attempt < 8 {
             do throws(Sparse.Error) {
                 let matrix = try a.adding(b, scaledBy: -sigma)
                 return (sigma, try Factorization(matrix, elimination: elimination))
             } catch {
                 sigma += Scalar(attempt + 1) * Scalar.ulpOfOne.squareRoot() * Swift.max(Swift.abs(sigma), scale) * 1e-3
             }
+            attempt += 1
         }
         throw .shift
     }
@@ -62,27 +64,38 @@ extension Eigen.Lanczos {
         let diagonalA = a.diagonal
         let diagonalB = b.diagonal
         var least = Scalar.infinity
-        for index in 0..<order {
+        var index = 0
+        while index < order {
             guard diagonalB[index] > 0 else { throw .shift }
             least = Swift.min(least, diagonalA[index] / diagonalB[index])
+            index += 1
         }
         let scale = normA / normB
+        let fallback = -scale * Scalar.ulpOfOne.squareRoot()
         var shift: Scalar
         if let given = options.shift {
             shift = given
-        } else if least > 0, let zero = try? factor(0), zero.shift == 0, zero.factorization.inertia.negative == 0 {
-            // A positive definite `A`: zero lies below the spectrum and as close to its low end as any shift can.
-            return zero
+        } else if least > 0 {
+            // WHY: for a positive definite `A`, zero lies below the spectrum and as near its low end as a shift can.
+            do throws(Eigen.Error) {
+                let zero = try factor(0)
+                if zero.shift == 0 && zero.factorization.inertia.negative == 0 { return zero }
+                shift = fallback
+            } catch {
+                shift = fallback
+            }
         } else if least < 0 {
             shift = least * 2
         } else {
-            // A singular or nearly singular `A`, as with rigid-body modes: just below zero, clear of its rounding.
-            shift = -scale * Scalar.ulpOfOne.squareRoot()
+            // WHY: a singular `A`, as with rigid-body modes, needs a shift just below zero and clear of its rounding.
+            shift = fallback
         }
-        for _ in 0..<64 {
+        var round = 0
+        while round < 64 {
             let found = try factor(shift)
             if found.factorization.inertia.negative == 0 { return found }
             shift = found.shift - Swift.max(Swift.abs(found.shift), scale * Scalar.ulpOfOne) * 9
+            round += 1
         }
         throw .shift
     }
@@ -99,13 +112,13 @@ extension Eigen.Lanczos {
         var check: (shift: Scalar, negative: Int)? = nil
         let separation = options.tolerance.squareRoot()
         while verified < count {
-            // A run deflates the eigenvectors found near its shift; the rest were purged from its start vector and
+            // WHY: a run deflates the eigenvectors found near its shift; the rest were purged from its start vector and
             // return only through rounding, which acceptance checks for.
             let nearby = values.indices.filter { Swift.abs(values[$0] - sigma) <= reach }
             let pending = values.reduce(0) { $1 > bound ? $0 + 1 : $0 }
             let wanted = Swift.max(count - verified - pending, missing, 1)
             let size = Swift.min(
-                options.basis.map { Swift.max($0, 1) } ?? Swift.min(Swift.max(2 * wanted + 20, 40), 300) * extra,
+                options.basis.map { Swift.max(Int(bitPattern: $0), 1) } ?? Swift.min(Swift.max(2 * wanted + 20, 40), 300) * extra,
                 order - values.count
             )
             guard size > 0 else { throw .incomplete }
@@ -123,13 +136,13 @@ extension Eigen.Lanczos {
                 reach = Swift.max(reach, Swift.abs(pair.value - sigma))
             }
             if accepted == 0 { extra = Swift.min(extra * 2, 64) }
-            // The check: midway between the highest value found below the first unconverged Ritz value and the value
+            // WHY: the check: midway between the highest value found below the first unconverged Ritz value and the value
             // after it, never inside a cluster closer than rounding can tell apart. Its inertia counts the values
             // below it.
             let unconverged = run.unconverged.min() ?? Scalar.infinity
             let above = values.filter { $0 > bound }.sorted() + [unconverged]
             var settled = -1
-            for index in 0..<(above.count - 1) where above[index] < unconverged {
+            for index in above.indices.dropLast() where above[index] < unconverged {
                 let gap = above[index + 1] - above[index]
                 let scale = Swift.max(Swift.abs(above[index]), Swift.abs(above[index + 1]))
                 if !above[index + 1].isFinite || gap > separation * scale { settled = index }
@@ -156,7 +169,7 @@ extension Eigen.Lanczos {
             }
             let below = values.reduce(0) { $1 <= shift ? $0 + 1 : $0 }
             if negative == below {
-                // Everything below the check is found: it becomes the bound, and the next shift.
+                // WHY: everything below the check is found: it becomes the bound, and the next shift.
                 bound = shift
                 verified = negative
                 missing = 0
@@ -170,7 +183,7 @@ extension Eigen.Lanczos {
                 reach = 0
                 check = nil
             } else {
-                // Copies of repeated values are still missing below the check. A run at the same shift from a start
+                // WHY: copies of repeated values are still missing below the check. A run at the same shift from a start
                 // vector purged of every value found has them as its nearest; after two such runs the shift moves
                 // up to the check anyway. More found than counted comes only from a value within rounding of it.
                 missing = Swift.max(negative - below, 0)
@@ -223,27 +236,17 @@ extension Eigen.Lanczos {
         let ax = a.applied(to: x)
         let bx = b.applied(to: x)
         var sum: Scalar = 0
-        for row in 0..<order {
+        var row = 0
+        while row < order {
             let r = ax[row] - value * bx[row]
             sum += r * r
+            row += 1
         }
         return sum.squareRoot() <= options.tolerance * (normA + Swift.abs(value) * normB) * Self.dot(x, x).squareRoot()
     }
 }
 
 extension Eigen.Lanczos {
-    @usableFromInline
-    struct Run {
-        @usableFromInline var accepted: [Eigen.Pair<Scalar>]
-        @usableFromInline var unconverged: [Scalar]
-
-        @inlinable
-        init(accepted: [Eigen.Pair<Scalar>], unconverged: [Scalar]) {
-            self.accepted = accepted
-            self.unconverged = unconverged
-        }
-    }
-
     /// One Lanczos run at `shift`: the eigenpairs above `bound` whose residual meets the tolerance, and the Ritz values
     /// above `bound` that do not yet.
     @inlinable
@@ -295,12 +298,11 @@ extension Eigen.Lanczos {
                     offDiagonal: Array(betas.prefix(steps - 1)),
                     rows: 1
                 )
-                var converged = 0
-                for index in 0..<steps {
+                let converged = estimate.values.indices.filter { index in
                     let theta = estimate.values[index]
-                    guard theta != 0, shift + 1 / theta > bound else { continue }
-                    if Swift.abs(beta * estimate.vectors[index]) <= tolerance * Swift.abs(theta) { converged += 1 }
-                }
+                    return theta != 0 && shift + 1 / theta > bound
+                        && Swift.abs(beta * estimate.vectors[index]) <= tolerance * Swift.abs(theta)
+                }.count
                 if converged >= wanted { break }
             }
         }
@@ -312,11 +314,10 @@ extension Eigen.Lanczos {
         var accepted: [Eigen.Pair<Scalar>] = []
         var unconverged: [Scalar] = []
         var bx = [Scalar](repeating: 0, count: n)
-        for index in 0..<steps {
+        let candidates = ritz.values.indices.filter { ritz.values[$0] != 0 && shift + 1 / ritz.values[$0] > bound }
+        for index in candidates {
             let theta = ritz.values[index]
-            guard theta != 0 else { continue }
             let value = shift + 1 / theta
-            guard value > bound else { continue }
             let last = ritz.vectors[index * steps + steps - 1]
             guard Swift.abs(beta * last) <= 10 * tolerance * Swift.abs(theta) else {
                 unconverged.append(value)
@@ -339,12 +340,14 @@ extension Eigen.Lanczos {
     /// the first `columns` columns of the basis; `q` is `B w` on entry and on exit.
     @inlinable
     func orthogonalize(_ w: inout [Scalar], _ q: inout [Scalar], against indices: [Int], basis: [Scalar], columns: Int) {
-        for _ in 0..<2 {
+        var round2 = 0
+        while round2 < 2 {
             let found = indices.map { Self.dot(vectors[$0], q) }
             let coefficients = Self.products(basis, columns: columns, q)
             for (position, index) in indices.enumerated() { Self.add(&w, -found[position], vectors[index]) }
             Self.accumulate(&w, basis, coefficients.map { -$0 })
             b.apply(to: w, into: &q)
+            round2 += 1
         }
     }
 
@@ -354,6 +357,147 @@ extension Eigen.Lanczos {
         let key = Threefry.Key(seed: seed)
         return (0..<count).map { index in
             Threefry.unit(key: key, stream: stream, index: UInt64(index), as: Scalar.self) * 2 - 1
+        }
+    }
+}
+
+extension Eigen.Lanczos {
+    /// `xᵀ y` over four running sums.
+    @inlinable
+    static func dot(_ x: [Scalar], _ y: [Scalar]) -> Scalar {
+        precondition(x.count == y.count, "vectors of one length")
+        return x.withUnsafeBufferPointer { x in
+            y.withUnsafeBufferPointer { y in
+                unsafe dot(x, from: 0, y, count: x.count)
+            }
+        }
+    }
+
+    /// The dot product of `count` entries of `x` starting at `start` and the first `count` of `y`.
+    @inlinable
+    static func dot(_ x: UnsafeBufferPointer<Scalar>, from start: Int, _ y: UnsafeBufferPointer<Scalar>, count: Int) -> Scalar {
+        var s0: Scalar = 0
+        var s1: Scalar = 0
+        var s2: Scalar = 0
+        var s3: Scalar = 0
+        var index = 0
+        while index + 4 <= count {
+            unsafe s0 += x[start + index] * y[index]
+            unsafe s1 += x[start + index + 1] * y[index + 1]
+            unsafe s2 += x[start + index + 2] * y[index + 2]
+            unsafe s3 += x[start + index + 3] * y[index + 3]
+            index += 4
+        }
+        while index < count {
+            unsafe s0 += x[start + index] * y[index]
+            index += 1
+        }
+        return (s0 + s1) + (s2 + s3)
+    }
+
+    /// `y += factor · x`.
+    @inlinable
+    static func add(_ y: inout [Scalar], _ factor: Scalar, _ x: [Scalar]) {
+        precondition(x.count == y.count, "vectors of one length")
+        if factor == 0 { return }
+        y.withUnsafeMutableBufferPointer { y in
+            x.withUnsafeBufferPointer { x in
+                var index = 0
+                while index < y.count {
+                    unsafe y[index] += factor * x[index]
+                    index += 1
+                }
+            }
+        }
+    }
+
+    @inlinable
+    static func scale(_ x: inout [Scalar], by factor: Scalar) {
+        x.withUnsafeMutableBufferPointer { x in
+            var index = 0
+            while index < x.count {
+                unsafe x[index] *= factor
+                index += 1
+            }
+        }
+    }
+
+    /// `Vᵀ q` for the first `columns` columns of the column-major `basis`, whose columns have `q.count` rows.
+    @inlinable
+    static func products(_ basis: [Scalar], columns: Int, _ q: [Scalar]) -> [Scalar] {
+        let n = q.count
+        var result = [Scalar](repeating: 0, count: columns)
+        basis.withUnsafeBufferPointer { v in
+            q.withUnsafeBufferPointer { q in
+                var column = 0
+                while column + 4 <= columns {
+                    let a = column * n
+                    let b = a + n
+                    let c = b + n
+                    let d = c + n
+                    var sa: Scalar = 0
+                    var sb: Scalar = 0
+                    var sc: Scalar = 0
+                    var sd: Scalar = 0
+                    var row = 0
+                    while row < n {
+                        let x = unsafe q[row]
+                        unsafe sa += v[a + row] * x
+                        unsafe sb += v[b + row] * x
+                        unsafe sc += v[c + row] * x
+                        unsafe sd += v[d + row] * x
+                        row += 1
+                    }
+                    result[column] = sa
+                    result[column + 1] = sb
+                    result[column + 2] = sc
+                    result[column + 3] = sd
+                    column += 4
+                }
+                while column < columns {
+                    result[column] = unsafe dot(v, from: column * n, q, count: n)
+                    column += 1
+                }
+            }
+        }
+        return result
+    }
+
+    /// `w += V c` over the first `c.count` columns of the column-major `basis`, whose columns have `w.count` rows.
+    @inlinable
+    static func accumulate(_ w: inout [Scalar], _ basis: [Scalar], _ c: [Scalar]) {
+        let n = w.count
+        let columns = c.count
+        basis.withUnsafeBufferPointer { v in
+            w.withUnsafeMutableBufferPointer { w in
+                var column = 0
+                while column + 4 <= columns {
+                    let a = column * n
+                    let b = a + n
+                    let c2 = b + n
+                    let d = c2 + n
+                    let ca = c[column]
+                    let cb = c[column + 1]
+                    let cc = c[column + 2]
+                    let cd = c[column + 3]
+                    var row = 0
+                    while row < n {
+                        unsafe w[row] += ca * v[a + row] + cb * v[b + row] + cc * v[c2 + row] + cd * v[d + row]
+                        row += 1
+                    }
+                    column += 4
+                }
+                while column < columns {
+                    let a = column * n
+                    let ca = c[column]
+                    var row = 0
+                    while row < n {
+                        unsafe w[row] += ca * v[a + row]
+                        row += 1
+                    }
+                    column += 1
+                }
+            }
         }
     }
 }
