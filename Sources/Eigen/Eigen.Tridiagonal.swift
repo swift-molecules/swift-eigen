@@ -4,14 +4,14 @@ extension Eigen {
         /// The diagonal, `order` entries.
         public let diagonal: [Scalar]
         /// The entries at `(i, i + 1)` and `(i + 1, i)`, `order − 1` of them.
-        public let offDiagonal: [Scalar]
+        public let subdiagonal: [Scalar]
 
         /// Fails with `.order` unless there is one fewer off-diagonal entry than diagonal ones (none for an empty matrix).
         @inlinable
-        public init(diagonal: [Scalar], offDiagonal: [Scalar]) throws(Eigen.Error) {
-            guard offDiagonal.count == Swift.max(diagonal.count - 1, 0) else { throw .order }
+        public init(diagonal: [Scalar], subdiagonal: [Scalar]) throws(Eigen.Error) {
+            guard subdiagonal.count == diagonal.dropFirst().count else { throw .order }
             self.diagonal = diagonal
-            self.offDiagonal = offDiagonal
+            self.subdiagonal = subdiagonal
         }
     }
 }
@@ -24,14 +24,14 @@ extension Eigen.Tridiagonal {
     /// The eigenvalues, ascending.
     @inlinable
     public var values: [Scalar] {
-        Self.decomposed(diagonal: diagonal, offDiagonal: offDiagonal, rows: 0).values
+        Self.decomposed(diagonal: diagonal, subdiagonal: subdiagonal, rows: 0).values
     }
 
     /// The eigenpairs, ascending by value, each vector of unit length; together the vectors are orthonormal.
     @inlinable
     public var pairs: [Eigen.Pair<Scalar>] {
         let order = diagonal.count
-        let result = Self.decomposed(diagonal: diagonal, offDiagonal: offDiagonal, rows: order)
+        let result = Self.decomposed(diagonal: diagonal, subdiagonal: subdiagonal, rows: order)
         return (0..<order).map { index in
             Eigen.Pair(value: result.values[index], vector: Array(result.vectors[(index * order)..<((index + 1) * order)]))
         }
@@ -45,12 +45,12 @@ extension Eigen.Tridiagonal {
     @inlinable
     internal static func decomposed(
         diagonal: [Scalar],
-        offDiagonal: [Scalar],
+        subdiagonal: [Scalar],
         rows: Int
     ) -> (values: [Scalar], vectors: [Scalar]) {
         let order = diagonal.count
         var d = diagonal
-        var e = offDiagonal + [0]
+        var e = subdiagonal + [0]
         if order == 0 { return ([], []) }
         var z = [Scalar](repeating: 0, count: order * rows)
         var row = 0
@@ -117,7 +117,11 @@ extension Eigen.Tridiagonal {
         let sorted = (0..<order).sorted { d[$0] < d[$1] }
         var vectors = [Scalar](repeating: 0, count: order * rows)
         for (index, original) in sorted.enumerated() {
-            for row in 0..<rows { vectors[index * rows + row] = z[original * rows + row] }
+            var row = 0
+            while row < rows {
+                vectors[index * rows + row] = z[original * rows + row]
+                row += 1
+            }
         }
         return (sorted.map { d[$0] }, vectors)
     }

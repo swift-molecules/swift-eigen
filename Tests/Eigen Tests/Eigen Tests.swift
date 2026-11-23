@@ -1,6 +1,5 @@
 import Eigen
 import Eigen_Test_Support
-import Cardinal
 import Foundation
 import Sparse_Test_Support
 import Testing
@@ -27,11 +26,15 @@ extension `Eigen Tests` {
             return 4 * s * s / (h * h)
         }
         var values: [Double] = []
-        for p in 1...columns {
-            for q in 1...rows {
+        var p = 1
+        while p <= columns {
+            var q = 1
+            while q <= rows {
                 let sum = mu(p, columns) + mu(q, rows)
                 values.append(sum * sum)
+                q += 1
             }
+            p += 1
         }
         return values.sorted()
     }
@@ -40,54 +43,93 @@ extension `Eigen Tests` {
     static func dense(_ a: [[Double]], _ b: [[Double]]) -> [Double] {
         let n = a.count
         var l = [[Double]](repeating: [Double](repeating: 0, count: n), count: n)
-        for i in 0..<n {
-            for j in 0...i {
+        var i = 0
+        while i < n {
+            var j = 0
+            while j <= i {
                 var sum = b[i][j]
-                for k in 0..<j { sum -= l[i][k] * l[j][k] }
+                var k = 0
+                while k < j {
+                    sum -= l[i][k] * l[j][k]
+                    k += 1
+                }
                 l[i][j] = i == j ? sum.squareRoot() : sum / l[j][j]
+                j += 1
             }
+            i += 1
         }
         // c = L⁻¹ A L⁻ᵀ
         var y = a
-        for column in 0..<n {
-            for i in 0..<n {
+        var column = 0
+        while column < n {
+            var i = 0
+            while i < n {
                 var sum = y[i][column]
-                for k in 0..<i { sum -= l[i][k] * y[k][column] }
+                var k = 0
+                while k < i {
+                    sum -= l[i][k] * y[k][column]
+                    k += 1
+                }
                 y[i][column] = sum / l[i][i]
+                i += 1
             }
+            column += 1
         }
         var c = y
-        for row in 0..<n {
-            for i in 0..<n {
+        var row = 0
+        while row < n {
+            var i = 0
+            while i < n {
                 var sum = y[row][i]
-                for k in 0..<i { sum -= l[i][k] * c[row][k] }
+                var k = 0
+                while k < i {
+                    sum -= l[i][k] * c[row][k]
+                    k += 1
+                }
                 c[row][i] = sum / l[i][i]
+                i += 1
             }
+            row += 1
         }
-        for _ in 0..<100 {
+        var sweep = 0
+        while sweep < 100 {
             var off = 0.0
-            for i in 0..<n { for j in 0..<n where i != j { off += c[i][j] * c[i][j] } }
+            var i = 0
+            while i < n {
+                off += c[i].enumerated().filter { $0.offset != i }.reduce(0) { $0 + $1.element * $1.element }
+                i += 1
+            }
             if off < 1e-28 { break }
-            for p in 0..<n {
-                for q in (p + 1)..<n where c[p][q] != 0 {
+            var p = 0
+            while p < n {
+                var q = p + 1
+                while q < n {
+                    defer { q += 1 }
+                    if c[p][q] == 0 { continue }
                     let theta = (c[q][q] - c[p][p]) / (2 * c[p][q])
                     let t = (theta >= 0 ? 1 : -1) / (Swift.abs(theta) + (theta * theta + 1).squareRoot())
                     let cs = 1 / (t * t + 1).squareRoot()
                     let sn = t * cs
-                    for k in 0..<n {
+                    var k = 0
+                    while k < n {
                         let ckp = c[k][p]
                         let ckq = c[k][q]
                         c[k][p] = cs * ckp - sn * ckq
                         c[k][q] = sn * ckp + cs * ckq
+                        k += 1
                     }
-                    for k in 0..<n {
+                    k = 0
+                    while k < n {
                         let cpk = c[p][k]
                         let cqk = c[q][k]
                         c[p][k] = cs * cpk - sn * cqk
                         c[q][k] = sn * cpk + cs * cqk
+                        k += 1
                     }
                 }
+                p += 1
             }
+            sweep += 1
         }
         return (0..<n).map { c[$0][$0] }.sorted()
     }
@@ -101,7 +143,7 @@ extension `Eigen Tests` {
             let n = 60
             let matrix = try Eigen.Tridiagonal(
                 diagonal: [Double](repeating: 2, count: n),
-                offDiagonal: [Double](repeating: -1, count: n - 1)
+                subdiagonal: [Double](repeating: -1, count: n - 1)
             )
             let expected = (1...n).map { 2 - 2 * cos(Double($0) * Double.pi / Double(n + 1)) }.sorted()
             #expect(zip(matrix.values, expected).allSatisfy { Swift.abs($0 - $1) < 1e-13 })
@@ -110,29 +152,35 @@ extension `Eigen Tests` {
         @Test
         func `The pairs are orthonormal eigenpairs`() throws {
             let diagonal = (0..<25).map { Double(($0 * 37) % 11) - 5 }
-            let offDiagonal = (0..<24).map { Double(($0 * 13) % 7) - 3 }
-            let matrix = try Eigen.Tridiagonal(diagonal: diagonal, offDiagonal: offDiagonal)
+            let subdiagonal = (0..<24).map { Double(($0 * 13) % 7) - 3 }
+            let matrix = try Eigen.Tridiagonal(diagonal: diagonal, subdiagonal: subdiagonal)
             let pairs = matrix.pairs
             for pair in pairs {
-                for row in 0..<25 {
+                var row = 0
+                while row < 25 {
                     var product = diagonal[row] * pair.vector[row]
-                    if row > 0 { product += offDiagonal[row - 1] * pair.vector[row - 1] }
-                    if row < 24 { product += offDiagonal[row] * pair.vector[row + 1] }
+                    if row > 0 { product += subdiagonal[row - 1] * pair.vector[row - 1] }
+                    if row < 24 { product += subdiagonal[row] * pair.vector[row + 1] }
                     #expect(Swift.abs(product - pair.value * pair.vector[row]) < 1e-12)
+                    row += 1
                 }
             }
-            for i in 0..<25 {
-                for j in 0..<25 {
+            var i = 0
+            while i < 25 {
+                var j = 0
+                while j < 25 {
                     let dot = zip(pairs[i].vector, pairs[j].vector).reduce(0) { $0 + $1.0 * $1.1 }
                     #expect(Swift.abs(dot - (i == j ? 1 : 0)) < 1e-12)
+                    j += 1
                 }
+                i += 1
             }
             #expect(pairs.map(\.value) == matrix.values)
         }
 
         @Test
         func `A diagonal of the wrong length is refused`() throws {
-            #expect(throws: Eigen.Error.order) { try Eigen.Tridiagonal<Double>(diagonal: [1, 2], offDiagonal: []) }
+            #expect(throws: Eigen.Error.order) { try Eigen.Tridiagonal<Double>(diagonal: [1, 2], subdiagonal: []) }
         }
     }
 
@@ -161,7 +209,7 @@ extension `Eigen Tests` {
         @Test
         func `A free string has a rigid mode at zero and the rest in closed form`() throws {
             let points = 300
-            let pencil = try Eigen.Pencil<Double>.string(points: Cardinal(UInt(points)), fixed: false)
+            let pencil = try Eigen.Pencil<Double>.string(points: Cardinal(UInt(points)), ends: .free)
             let pairs = try pencil.lowest(12)
             let h = 1 / Double(points - 1)
             let expected = (0..<12).map { p in
@@ -219,7 +267,7 @@ extension `Eigen Tests` {
         func `Every eigenvalue of a scattered pencil matches a dense solve`(seed: UInt64) throws {
             let order: Cardinal = 40
             let a = try Sparse.Symmetric<Double>.scattered(order: order, perRow: 3, seed: seed)
-                .adding(try .tridiagonal(order: order, diagonal: 1, offDiagonal: 0), scaledBy: -3)
+                .adding(try .tridiagonal(order: order, diagonal: 1, subdiagonal: 0), scaledBy: -3)
             let b = try Sparse.Symmetric<Double>.scattered(order: order, perRow: 2, seed: seed + 10)
             let pencil = try Eigen.Pencil(a, b)
             let pairs = try pencil.lowest(order)

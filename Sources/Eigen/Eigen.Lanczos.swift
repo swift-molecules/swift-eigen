@@ -37,19 +37,16 @@ extension Eigen {
 }
 
 extension Eigen.Lanczos {
-    @usableFromInline
-    typealias Factorization = Sparse.Symmetric<Scalar>.Factorization
-
     /// The factorization of `A − σB`, nudging `σ` off an exact eigenvalue of a leading block when a pivot is zero.
     @inlinable
-    func factor(_ shift: Scalar) throws(Eigen.Error) -> (shift: Scalar, factorization: Factorization) {
+    func factor(_ shift: Scalar) throws(Eigen.Error) -> (shift: Scalar, factorization: Sparse.Symmetric<Scalar>.Factorization) {
         var sigma = shift
         let scale = Swift.max(normA / Swift.max(normB, Scalar.leastNormalMagnitude), Scalar.leastNormalMagnitude)
         var attempt = 0
         while attempt < 8 {
             do throws(Sparse.Error) {
                 let matrix = try a.adding(b, scaledBy: -sigma)
-                return (sigma, try Factorization(matrix, elimination: elimination))
+                return (sigma, try Sparse.Symmetric<Scalar>.Factorization(matrix, elimination: elimination))
             } catch {
                 sigma += Scalar(attempt + 1) * Scalar.ulpOfOne.squareRoot() * Swift.max(Swift.abs(sigma), scale) * 1e-3
             }
@@ -60,7 +57,7 @@ extension Eigen.Lanczos {
 
     /// A shift with no eigenvalue below it, and its factorization.
     @inlinable
-    func start() throws(Eigen.Error) -> (shift: Scalar, factorization: Factorization) {
+    func start() throws(Eigen.Error) -> (shift: Scalar, factorization: Sparse.Symmetric<Scalar>.Factorization) {
         let diagonalA = a.diagonal
         let diagonalB = b.diagonal
         var least = Scalar.infinity
@@ -147,7 +144,7 @@ extension Eigen.Lanczos {
                 let scale = Swift.max(Swift.abs(above[index]), Swift.abs(above[index + 1]))
                 if !above[index + 1].isFinite || gap > separation * scale { settled = index }
             }
-            var next: (shift: Scalar, factorization: Factorization)? = nil
+            var next: (shift: Scalar, factorization: Sparse.Symmetric<Scalar>.Factorization)? = nil
             if settled >= 0 {
                 let candidate: Scalar
                 if above[settled + 1].isFinite {
@@ -252,7 +249,7 @@ extension Eigen.Lanczos {
     @inlinable
     mutating func run(
         shift: Scalar,
-        factorization: Factorization,
+        factorization: Sparse.Symmetric<Scalar>.Factorization,
         nearby: [Int],
         bound: Scalar,
         wanted: Int,
@@ -295,7 +292,7 @@ extension Eigen.Lanczos {
             if steps >= wanted && steps % 10 == 0 {
                 let estimate = Eigen.Tridiagonal.decomposed(
                     diagonal: alphas,
-                    offDiagonal: Array(betas.prefix(steps - 1)),
+                    subdiagonal: Array(betas.prefix(steps - 1)),
                     rows: 1
                 )
                 let converged = estimate.values.indices.filter { index in
@@ -308,7 +305,7 @@ extension Eigen.Lanczos {
         }
         let ritz = Eigen.Tridiagonal.decomposed(
             diagonal: alphas,
-            offDiagonal: Array(betas.prefix(steps - 1)),
+            subdiagonal: Array(betas.prefix(steps - 1)),
             rows: steps
         )
         var accepted: [Eigen.Pair<Scalar>] = []

@@ -34,7 +34,6 @@ let package = Package(
             dependencies: [
                 .target(name: "Eigen"),
                 .target(name: "Eigen Test Support"),
-                .product(name: "Cardinal", package: "swift-cardinal"),
                 .product(name: "Sparse Test Support", package: "swift-sparse"),
             ]
         ),

@@ -10,7 +10,8 @@ extension Eigen.Pencil {
     /// Free at both ends, the nodes include the ends, `h = 1/(points − 1)`, `A` is singular with the rigid translation
     /// as the mode of eigenvalue zero, and the eigenvalues are the same expression with `c = cos(pπh)` for `p` in
     /// `0..<points`.
-    public static func string(points: Cardinal, fixed: Bool = true) throws(Eigen.Error) -> Self {
+    public static func string(points: Cardinal, ends: Ends = .fixed) throws(Eigen.Error) -> Self {
+        let fixed = ends == .fixed
         let points = Int(bitPattern: points)
         let h = fixed ? 1 / Scalar(points + 1) : 1 / Scalar(points - 1)
         var stiffness: [Sparse.Symmetric<Scalar>.Entry] = []
@@ -21,24 +22,24 @@ extension Eigen.Pencil {
             let i = fixed ? element - 1 : element
             let j = i + 1
             if i >= 0 {
-                stiffness.append(.init(i, i, 1 / h))
-                mass.append(.init(i, i, 2 * h / 6))
+                stiffness.append(.init(Ordinal(UInt(i)), Ordinal(UInt(i)), 1 / h))
+                mass.append(.init(Ordinal(UInt(i)), Ordinal(UInt(i)), 2 * h / 6))
             }
             if j < points {
-                stiffness.append(.init(j, j, 1 / h))
-                mass.append(.init(j, j, 2 * h / 6))
+                stiffness.append(.init(Ordinal(UInt(j)), Ordinal(UInt(j)), 1 / h))
+                mass.append(.init(Ordinal(UInt(j)), Ordinal(UInt(j)), 2 * h / 6))
             }
             if i >= 0 && j < points {
-                stiffness.append(.init(i, j, -1 / h))
-                mass.append(.init(i, j, h / 6))
+                stiffness.append(.init(Ordinal(UInt(i)), Ordinal(UInt(j)), -1 / h))
+                mass.append(.init(Ordinal(UInt(i)), Ordinal(UInt(j)), h / 6))
             }
             element += 1
         }
         let a: Sparse.Symmetric<Scalar>
         let b: Sparse.Symmetric<Scalar>
         do throws(Sparse.Error) {
-            a = try Sparse.Symmetric(order: points, entries: stiffness)
-            b = try Sparse.Symmetric(order: points, entries: mass)
+            a = try Sparse.Symmetric(order: Cardinal(UInt(points)), entries: stiffness)
+            b = try Sparse.Symmetric(order: Cardinal(UInt(points)), entries: mass)
         } catch {
             throw .order
         }
@@ -56,7 +57,7 @@ extension Eigen.Pencil {
         do throws(Sparse.Error) {
             let biharmonic = try Sparse.Symmetric<Scalar>.biharmonic(rows: rows, columns: columns)
             a = biharmonic.scaled(by: 1 / (h * h * h * h))
-            b = try .tridiagonal(order: Cardinal(UInt(biharmonic.order)), diagonal: 1, offDiagonal: 0)
+            b = try .tridiagonal(order: Cardinal(UInt(biharmonic.order)), diagonal: 1, subdiagonal: 0)
         } catch {
             throw .order
         }
