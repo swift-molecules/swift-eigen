@@ -282,7 +282,7 @@ extension `Eigen Tests` {
         func `Bad questions are refused`() throws {
             let pencil = try Eigen.Pencil<Double>.string(points: 5)
             #expect(throws: Eigen.Error.count) { try pencil.lowest(6) }
-                        #expect(try pencil.lowest(0).isEmpty)
+            #expect(try pencil.lowest(0).isEmpty)
             #expect(throws: Eigen.Error.order) {
                 try Eigen.Pencil(try Sparse.Symmetric<Double>.laplacian(rows: 2, columns: 2), try .laplacian(rows: 1, columns: 2))
             }
