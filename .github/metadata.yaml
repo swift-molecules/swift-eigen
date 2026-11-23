@@ -1,0 +1,9 @@
+description: "Symmetric eigenproblems for Swift: the lowest modes of a sparse pencil K x = λ M x by shift-invert Lanczos, and symmetric tridiagonal matrices."
+topics:
+  - primitives
+  - eigenvalues
+  - linear-algebra
+  - numerics
+homepage: "https://swift-institute.org"
+readme:
+  family: E
