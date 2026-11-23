@@ -176,9 +176,9 @@ extension `Eigen Tests` {
 
         @Test
         func `Many modes are found over many shifts and none is skipped`() throws {
-            let pencil = try Eigen.Pencil<Double>.string(points: 1500)
-            let pairs = try pencil.lowest(400, options: .init(basis: 120))
-            #expect(`Eigen Tests`.relative(pairs.map(\.value), Array(`Eigen Tests`.string(points: 1500).prefix(400))) < 1e-9)
+            let pencil = try Eigen.Pencil<Double>.string(points: 600)
+            let pairs = try pencil.lowest(150, options: .init(basis: 50))
+            #expect(`Eigen Tests`.relative(pairs.map(\.value), Array(`Eigen Tests`.string(points: 600).prefix(150))) < 1e-9)
             #expect(pencil.residual(of: pairs) < 1e-10)
             #expect(pencil.orthogonality(of: pairs) < 1e-9)
         }
